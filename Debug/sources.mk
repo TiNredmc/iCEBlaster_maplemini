@@ -24,8 +24,6 @@ SUBDIRS := \
 Core/Src \
 Core/Startup \
 Drivers/STM32F1xx_HAL_Driver/Src \
-EFSL/src \
-EFSL/src/interfaces \
 Middlewares/ST/STM32_USB_Device_Library/Class/MSC/Src \
 Middlewares/ST/STM32_USB_Device_Library/Core/Src \
 USB_DEVICE/App \

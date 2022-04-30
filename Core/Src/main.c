@@ -22,7 +22,6 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-#include <W25QXX.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -32,13 +31,6 @@
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
 
-typedef struct{
-	uint8_t		MCO_freq;
-	uint8_t 	direct_flash_flag;// normally we use SPI NOR flash mode, if SPI flash init error, we automatically enter direct FPGA bitstream programming mode.
-	uint32_t 	last_byte_size;// latest size of byte flashed to NOR
-}icelink;
-
-icelink icy;
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
@@ -136,7 +128,7 @@ int main(void)
   HAL_Init();
 
   /* USER CODE BEGIN Init */
-  icy.MCO_freq = 48;// default MCO frequency is 48MHz.
+
   /* USER CODE END Init */
 
   /* Configure the system clock */
@@ -156,33 +148,58 @@ int main(void)
   // Important source files worth taking a look at :
   // USB_DEVICE/Target/usbd_conf.c
   // USB_DEVICE/App/usbd_storage_if.c
-  // FATFS/Target/user_diskio.c
 
   /* On Maple Mini board has USB bus gating controlled by PB9
      * If USB function of your STM32F103 Maple Mini doesn't work
      * Or your PC doesn't detect your board
      * Set PB9 to Logic low */
 
-  HAL_GPIO_WritePin(USB_EN_GPIO_Port, USB_EN_Pin, GPIO_PIN_RESET);
-
-   printf("%c",0x0c);// clear UART terminal screen
+     printf("%c",0x0c);// clear UART terminal screen
 
   HAL_GPIO_WritePin(CRESET_pin_GPIO_Port, CRESET_pin_Pin, GPIO_PIN_SET);// Release reset pin, lets FPGA run.
 
-//  // FatFS init
-//    res = f_mount(&fatfs, (TCHAR const*)fspath, 0);// mount fatfs
-//    if(res != FR_OK){
-//  	  printf("ERROR:Mount FATFS error, Please check the code / flash wear out\n");
-//  	  Error_Handler();// safety loop lock.
-//    }
-//
-//    res = f_mkfs((TCHAR const*)fspath, 0, 0);// format internal flash to FAT
-//    	if(res != FR_OK){
-//    		  printf("ERROR:MakeFS FATFS error, Please check the code / flash wear out\n");
-//    		  //Error_Handler();// safety loop lock.
-//    	  }
+    HAL_FLASH_Unlock();
+    const uint8_t ms_fat12[62] = {
+    		0xEB, 0x3C, 0x90, // Jump instruction to bootstrap (x86 instruction)
+			0x4D, 0x53, 0x44, 0x4F, 0x53, 0x35, 0x2E, 0x30,// OEM name as "MSDOS5.0"
+			0x00, 0x02,// sector size -> 0x200 = 512 bytes
+			0x01,// 1 Cluster = 1 sector = 512 bytes.
+			0x01, 0x00,// 1 sector reserved (FAT12)
+			0x02,// number of FATs == 2
+			0x00, 0x02,// 32-byte directory entries in the root directory == 512 bytes
+    		0x80, 0x00, // total sector of 128 sectors
+			0xF8, // Non-removable disk
+			0x01, 0x00,// FAT occupied 1 sector (FAT12)
+			0x01, 0x00,// 1 sector per track
+			0x01, 0x00,// 1 (reading?) head (irrelevant)
+			0x00, 0x00, 0x00, 0x00,// No hidden physical sectors.
+			0x00, 0x00, 0x00, 0x00,// Total number of sectors. Remains 0 since we use FAT12.
+			0x80,// Drive number (0x80 == fixed disk).
+			0x00,// Reserved (For WinNT).
+			0x29,// Extended boot signature
+			0xD5, 0x80, 0x9A, 0x1C,// Volume serial number
+			0x49, 0x43, 0x45, 0x42, 0x4C, 0x41, 0x53, 0x54, 0x45, 0x52, 0x20,// Volume lable "ICEBLASTER ".
+			0x46, 0x41, 0x54, 0x31, 0x32, 0x20, 0x20, 0x20// "FAT12   "
+    		};
 
+    	// Format the drive with the start up.
 
+    	HAL_FLASH_Unlock();
+    	// Page erase
+    	EraseInitStruct.TypeErase = FLASH_TYPEERASE_PAGES; // erase 1024 KBytes (which is the size of 1 page).
+    	EraseInitStruct.PageAddress = FLASH_MEM_BASE_ADDR; // We start erase from the beginning of sector.
+    	EraseInitStruct.NbPages = 1; // this tells eraser for how many page we want to erase.
+
+    	HAL_FLASHEx_Erase(&EraseInitStruct, &PAGEError);
+
+    	for(int i=0; i < 62; i+= 2){// Write Boot sector (BIOS Parameter Block) to the internal Flash.
+    		HAL_FLASH_Program(FLASH_TYPEPROGRAM_HALFWORD,
+    				FLASH_MEM_BASE_ADDR + i, (ms_fat12[i] | ms_fat12[i+1] << 8)); // flash modified data onto Flash memory.
+    	}
+
+    	HAL_FLASH_Program(FLASH_TYPEPROGRAM_HALFWORD, FLASH_MEM_BASE_ADDR + 510, 0xAA55);// Write the signature of FAT file system at the end of sector 0.
+
+    	HAL_GPIO_WritePin(USB_EN_GPIO_Port, USB_EN_Pin, GPIO_PIN_RESET);// Allow ELectrical USB connection.
 
   /* USER CODE END 2 */
 
@@ -259,6 +276,7 @@ int main(void)
 	HAL_GPIO_WritePin(CRESET_pin_GPIO_Port, CRESET_pin_Pin, GPIO_PIN_SET);
 	printf("DONE:Bit stream is flashed into SPI NOR");
 
+	// Reformat the drive space.
 
 	HAL_FLASH_Unlock();
 	// Page erase
@@ -268,7 +286,14 @@ int main(void)
 
 	HAL_FLASHEx_Erase(&EraseInitStruct, &PAGEError);
 
+	for(int i=0; i < 62; i+= 2){
+		HAL_FLASH_Program(FLASH_TYPEPROGRAM_HALFWORD,
+				FLASH_MEM_BASE_ADDR + i, (ms_fat12[i] | ms_fat12[i+1] << 8)); // flash modified data onto Flash memory.
+	}
 
+	HAL_FLASH_Program(FLASH_TYPEPROGRAM_HALFWORD, FLASH_MEM_BASE_ADDR + 510, 0xAA55);
+
+	// Disconnect and reconnect USB.
 	HAL_GPIO_WritePin(USB_EN_GPIO_Port, USB_EN_Pin, GPIO_PIN_SET);
 	HAL_Delay(20);
 	HAL_GPIO_WritePin(USB_EN_GPIO_Port, USB_EN_Pin, GPIO_PIN_RESET);
