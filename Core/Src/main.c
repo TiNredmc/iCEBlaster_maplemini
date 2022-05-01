@@ -109,6 +109,55 @@ uint8_t directLoad(uint8_t *data, uint32_t size){
 }
 
 
+// Drive mkfs
+void ice_mkfs(){
+	const uint8_t ms_fat12[62] = {
+			0xEB, 0x3C, 0x90, // Jump instruction to bootstrap (x86 instruction)
+			0x4D, 0x53, 0x44, 0x4F, 0x53, 0x35, 0x2E, 0x30,// OEM name as "MSDOS5.0"
+			0x00, 0x02,// sector size -> 0x200 = 512 bytes
+			0x01,// 1 Cluster = 1 sector = 512 bytes.
+			0x01, 0x00,// 1 sector reserved (FAT12)
+			0x02,// number of FATs == 2
+			0x00, 0x02,// 32-byte directory entries in the root directory == 512 bytes
+			0x80, 0x00, // total sector of 128 sectors
+			0xF8, // Non-removable disk
+			0x01, 0x00,// FAT occupied 1 sector (FAT12)
+			0x01, 0x00,// 1 sector per track
+			0x01, 0x00,// 1 (reading?) head (irrelevant)
+			0x00, 0x00, 0x00, 0x00,// No hidden physical sectors.
+			0x00, 0x00, 0x00, 0x00,// Total number of sectors (For FAT32). Remains 0 since we use FAT12.
+			0x80,// Drive number (0x80 == fixed disk).
+			0x00,// Reserved (For WinNT).
+			0x29,// Extended boot signature
+			0xD5, 0x80, 0x9A, 0x1C,// Volume serial number
+			0x49, 0x43, 0x45, 0x42, 0x4C, 0x41, 0x53, 0x54, 0x45, 0x52, 0x20,// Volume label "ICEBLASTER ".
+			0x46, 0x41, 0x54, 0x31, 0x32, 0x20, 0x20, 0x20// "FAT12   "
+			};
+
+		// Format the drive
+
+
+		HAL_FLASH_Unlock();
+		// Page erase
+		EraseInitStruct.TypeErase = FLASH_TYPEERASE_PAGES; // erase 1024 KBytes (which is the size of 1 page).
+		EraseInitStruct.PageAddress = FLASH_MEM_BASE_ADDR; // We start erase from the beginning of sector.
+		EraseInitStruct.NbPages = 64; // this tells eraser for how many page we want to erase.
+
+		HAL_FLASHEx_Erase(&EraseInitStruct, &PAGEError);
+
+		for(uint8_t i=0; i < 62; i+= 2){// Write Boot sector (BIOS Parameter Block) to the internal Flash.
+			HAL_FLASH_Program(FLASH_TYPEPROGRAM_HALFWORD,
+					FLASH_MEM_BASE_ADDR + i, (ms_fat12[i] | ms_fat12[i+1] << 8)); // flash modified data onto Flash memory.
+		}
+
+		HAL_FLASH_Program(FLASH_TYPEPROGRAM_HALFWORD, FLASH_MEM_BASE_ADDR + 510, 0xAA55);// Write the signature of FAT file system at the end of sector 0.
+
+		// Set Label name at the beginning of sector 3.
+		const uint8_t ice_label[12] = {'I', 'C', 'E', 'B', 'L', 'A', 'S', 'T', 'E', 'R', ' ', 0xFF};
+		for(uint8_t i =0; i < 12; i+= 2)
+			HAL_FLASH_Program(FLASH_TYPEPROGRAM_HALFWORD, FLASH_MEM_BASE_ADDR + 1024+512+i, (ice_label[i] | ice_label[i+1] << 8));
+}
+
 /* USER CODE END 0 */
 
 /**
@@ -146,7 +195,6 @@ int main(void)
   /* USER CODE BEGIN 2 */
 
   // Important source files worth taking a look at :
-  // USB_DEVICE/Target/usbd_conf.c
   // USB_DEVICE/App/usbd_storage_if.c
 
   /* On Maple Mini board has USB bus gating controlled by PB9
@@ -156,50 +204,10 @@ int main(void)
 
      printf("%c",0x0c);// clear UART terminal screen
 
-  HAL_GPIO_WritePin(CRESET_pin_GPIO_Port, CRESET_pin_Pin, GPIO_PIN_SET);// Release reset pin, lets FPGA run.
+     HAL_GPIO_WritePin(CRESET_pin_GPIO_Port, CRESET_pin_Pin, GPIO_PIN_SET);// Release reset pin, lets FPGA run.
+     ice_mkfs();
 
-    HAL_FLASH_Unlock();
-    const uint8_t ms_fat12[62] = {
-    		0xEB, 0x3C, 0x90, // Jump instruction to bootstrap (x86 instruction)
-			0x4D, 0x53, 0x44, 0x4F, 0x53, 0x35, 0x2E, 0x30,// OEM name as "MSDOS5.0"
-			0x00, 0x02,// sector size -> 0x200 = 512 bytes
-			0x01,// 1 Cluster = 1 sector = 512 bytes.
-			0x01, 0x00,// 1 sector reserved (FAT12)
-			0x02,// number of FATs == 2
-			0x00, 0x02,// 32-byte directory entries in the root directory == 512 bytes
-    		0x80, 0x00, // total sector of 128 sectors
-			0xF8, // Non-removable disk
-			0x01, 0x00,// FAT occupied 1 sector (FAT12)
-			0x01, 0x00,// 1 sector per track
-			0x01, 0x00,// 1 (reading?) head (irrelevant)
-			0x00, 0x00, 0x00, 0x00,// No hidden physical sectors.
-			0x00, 0x00, 0x00, 0x00,// Total number of sectors. Remains 0 since we use FAT12.
-			0x80,// Drive number (0x80 == fixed disk).
-			0x00,// Reserved (For WinNT).
-			0x29,// Extended boot signature
-			0xD5, 0x80, 0x9A, 0x1C,// Volume serial number
-			0x49, 0x43, 0x45, 0x42, 0x4C, 0x41, 0x53, 0x54, 0x45, 0x52, 0x20,// Volume lable "ICEBLASTER ".
-			0x46, 0x41, 0x54, 0x31, 0x32, 0x20, 0x20, 0x20// "FAT12   "
-    		};
-
-    	// Format the drive with the start up.
-
-    	HAL_FLASH_Unlock();
-    	// Page erase
-    	EraseInitStruct.TypeErase = FLASH_TYPEERASE_PAGES; // erase 1024 KBytes (which is the size of 1 page).
-    	EraseInitStruct.PageAddress = FLASH_MEM_BASE_ADDR; // We start erase from the beginning of sector.
-    	EraseInitStruct.NbPages = 1; // this tells eraser for how many page we want to erase.
-
-    	HAL_FLASHEx_Erase(&EraseInitStruct, &PAGEError);
-
-    	for(int i=0; i < 62; i+= 2){// Write Boot sector (BIOS Parameter Block) to the internal Flash.
-    		HAL_FLASH_Program(FLASH_TYPEPROGRAM_HALFWORD,
-    				FLASH_MEM_BASE_ADDR + i, (ms_fat12[i] | ms_fat12[i+1] << 8)); // flash modified data onto Flash memory.
-    	}
-
-    	HAL_FLASH_Program(FLASH_TYPEPROGRAM_HALFWORD, FLASH_MEM_BASE_ADDR + 510, 0xAA55);// Write the signature of FAT file system at the end of sector 0.
-
-    	HAL_GPIO_WritePin(USB_EN_GPIO_Port, USB_EN_Pin, GPIO_PIN_RESET);// Allow ELectrical USB connection.
+     HAL_GPIO_WritePin(USB_EN_GPIO_Port, USB_EN_Pin, GPIO_PIN_RESET);// Allow Electrical USB connection.
 
   /* USER CODE END 2 */
 
@@ -211,26 +219,25 @@ int main(void)
 
     /* USER CODE BEGIN 3 */
 
-	  uint8_t *flash_scan = (uint8_t *)(FLASH_MEM_BASE_ADDR);
-	  //Locate the Bitstream byte on internal flash by using "pattern match" algorithm.
-	  while(1){
-		  //flash_scan++;
-		  	  if(flash_scan == (uint8_t *)FLASH_MEM_END_ADDR)
-		  				flash_scan = (uint8_t *)(FLASH_MEM_BASE_ADDR);
+	uint8_t *flash_scan = (uint8_t *)(FLASH_MEM_BASE_ADDR);
+	//Locate the Bitstream byte on internal flash by using "pattern match" algorithm.
+	while(1){
+	  //flash_scan++;
+		  if(flash_scan == (uint8_t *)FLASH_MEM_END_ADDR)
+					flash_scan = (uint8_t *)(FLASH_MEM_BASE_ADDR);
 
-		  if(*(flash_scan++) == 0x7E){//MSB byte of preamble should be at 0x8015805.
-			  if(*(flash_scan++) == 0xAA){
-				  if(*(flash_scan++) == 0x99){
-					  if(*flash_scan == 0x7E){
-						  // found!
-						  HAL_Delay(1000);// slow down a bit. Let's the Bitstream copied.
-						  break;
-					  }
+	  if(*(flash_scan++) == 0x7E){//MSB byte of preamble should be at 0x8015805.
+		  if(*(flash_scan++) == 0xAA){
+			  if(*(flash_scan++) == 0x99){
+				  if(*flash_scan == 0x7E){
+					  // found!
+					  HAL_Delay(1000);// slow down a bit. Let's the Bitstream copied.
+					  break;
 				  }
 			  }
-
 		  }
 	  }
+	}
 
 	flash_scan -= 3;// After detected the preamble, move address back 3 byte to the beginning of the Bitstream.
 	// some temporary buffer to hold bit stream address on flash.
@@ -247,58 +254,40 @@ int main(void)
     	}
     }
 
+    // Calculate Bitstream size.
     bitstream_size = ((uint8_t *)flash_scan - fdata) + 1;
 
-   // release the reset and quickly blast bit stream to FPGA.
-   // procedure according to TN-02001 app note.
+	// release the reset and quickly blast Bitstream to FPGA.
+	// procedure according to TN-02001 app note.
 
-   /* FPGA Reset sequence*/
-   // CE Low
-   HAL_GPIO_WritePin(SPI1_CS_GPIO_Port, SPI1_CS_Pin, GPIO_PIN_RESET);
+	/* FPGA Reset sequence*/
+	// CE Low
+	HAL_GPIO_WritePin(SPI1_CS_GPIO_Port, SPI1_CS_Pin, GPIO_PIN_RESET);
 
-   // CRESET low
-   HAL_GPIO_WritePin(CRESET_pin_GPIO_Port, CRESET_pin_Pin, GPIO_PIN_RESET);
+	// CRESET low
+	HAL_GPIO_WritePin(CRESET_pin_GPIO_Port, CRESET_pin_Pin, GPIO_PIN_RESET);
 
-   HAL_Delay(100);// wait for 100ms.
+	HAL_Delay(100);// wait for 100ms.
 
-   // CRESET High
-   HAL_GPIO_WritePin(CRESET_pin_GPIO_Port, CRESET_pin_Pin, GPIO_PIN_SET);
+	// CRESET High
+	HAL_GPIO_WritePin(CRESET_pin_GPIO_Port, CRESET_pin_Pin, GPIO_PIN_SET);
 
-   HAL_Delay(2);// wait for 2ms.
+	HAL_Delay(2);// wait for 2ms.
 
-   // CE High
-   //HAL_GPIO_WritePin(w25q.CSBANK, w25q.CS_PIN, GPIO_PIN_SET);
-
-   // FPGA bit stream loading
-   directLoad(fdata, bitstream_size);
+	// FPGA bit stream loading
+	directLoad(fdata, bitstream_size);
 
 	// release reset to lets FPGA run.
 	HAL_GPIO_WritePin(CRESET_pin_GPIO_Port, CRESET_pin_Pin, GPIO_PIN_SET);
 	printf("DONE:Bit stream is flashed into SPI NOR");
 
 	// Reformat the drive space.
-
-	HAL_FLASH_Unlock();
-	// Page erase
-	EraseInitStruct.TypeErase = FLASH_TYPEERASE_PAGES; // erase 1024 KBytes (which is the size of 1 page).
-	EraseInitStruct.PageAddress = FLASH_MEM_BASE_ADDR; // We start erase from the beginning of sector.
-	EraseInitStruct.NbPages = 64; // this tells eraser for how many page we want to erase.
-
-	HAL_FLASHEx_Erase(&EraseInitStruct, &PAGEError);
-
-	for(int i=0; i < 62; i+= 2){
-		HAL_FLASH_Program(FLASH_TYPEPROGRAM_HALFWORD,
-				FLASH_MEM_BASE_ADDR + i, (ms_fat12[i] | ms_fat12[i+1] << 8)); // flash modified data onto Flash memory.
-	}
-
-	HAL_FLASH_Program(FLASH_TYPEPROGRAM_HALFWORD, FLASH_MEM_BASE_ADDR + 510, 0xAA55);
+	ice_mkfs();
 
 	// Disconnect and reconnect USB.
 	HAL_GPIO_WritePin(USB_EN_GPIO_Port, USB_EN_Pin, GPIO_PIN_SET);
 	HAL_Delay(20);
 	HAL_GPIO_WritePin(USB_EN_GPIO_Port, USB_EN_Pin, GPIO_PIN_RESET);
-
-   		//HAL_NVIC_SystemReset();// reset MCU
 
   }// while
   /* USER CODE END 3 */
