@@ -82,6 +82,10 @@ PUTCHAR_PROTOTYPE
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 
+/* iCEBlaster. STM32 based iCE40 Bitstream programmer tool with USB MSC Drag and Drop feature.
+ * Coded by TinLethax
+ * https://github.com/TiNredmc/iCEBlaster_maplemini
+ */
 
 /* directLoad is used when sending bit stream directly to iCE40 FPGA.
  * treat it as a slave device. By make sure that the CE pin is held low before release CRESET.
@@ -93,12 +97,15 @@ uint8_t directLoad(uint8_t *data, uint32_t size){
 	// send series of bitstream to FPGA via SPI.
 	HAL_SPI_Transmit(&hspi1, data, size, 100);
 
-
-	// Send at lease 100 clock cycles or 12 dummy bytes (96 cycles)
+	// Since we don't monitor the state of CDONE pin (Do it blindly).
+	// And to be sure that iCE40 is ready to boot
+	// We need to wait at least 100 SPI clock cycles.
+	// Send at least 100 clock cycles or 12 dummy bytes (96 cycles)
 	for(uint8_t i=0; i < 12;i++)
 		HAL_SPI_Transmit(&hspi1, &dummy, 1, 100);
 
-	// Send at lease 49 clock cycles or 7 dummy bytes (56 cycles)
+	// After 49 clock cycles. Pins that are used for configuration can be reconfigured and use as normal PIO.
+	// Send at least 49 clock cycles or 7 dummy bytes (56 cycles)
 	for(uint8_t i=0; i < 7;i++)
 		HAL_SPI_Transmit(&hspi1, &dummy, 1, 100);
 
