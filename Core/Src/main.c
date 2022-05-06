@@ -160,9 +160,12 @@ void ice_mkfs(){
 		HAL_FLASH_Program(FLASH_TYPEPROGRAM_HALFWORD, FLASH_MEM_BASE_ADDR + 510, 0xAA55);// Write the signature of FAT file system at the end of sector 0.
 
 		// Set Label name at the beginning of sector 3.
-		const uint8_t ice_label[12] = {'I', 'C', 'E', 'B', 'L', 'A', 'S', 'T', 'E', 'R', ' ', 0xFF};
-		for(uint8_t i =0; i < 12; i+= 2)
-			HAL_FLASH_Program(FLASH_TYPEPROGRAM_HALFWORD, FLASH_MEM_BASE_ADDR + 1024+512+i, (ice_label[i] | ice_label[i+1] << 8));
+		const uint8_t ice_label[16] = {'i', 'C', 'E', 'B', 'l', 'a', 's', 't', 'e', 'r', ' ', 0x08, 0x00, 0x00};
+		for(uint8_t i =0; i < 16; i+= 2)
+			HAL_FLASH_Program(FLASH_TYPEPROGRAM_HALFWORD, FLASH_MEM_BASE_ADDR + 0x600 +i, (ice_label[i] | ice_label[i+1] << 8));
+//
+//		for(uint32_t n = 16; n < 512; n += 2)
+//					HAL_FLASH_Program(FLASH_TYPEPROGRAM_HALFWORD, FLASH_MEM_BASE_ADDR + 0x600 + n, 0x0000);
 }
 
 /* USER CODE END 0 */
