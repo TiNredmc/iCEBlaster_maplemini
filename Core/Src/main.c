@@ -287,8 +287,6 @@ int main(void)
 	// FPGA bit stream loading
 	directLoad(fdata, bitstream_size);
 
-	// release reset to lets FPGA run.
-	HAL_GPIO_WritePin(CRESET_pin_GPIO_Port, CRESET_pin_Pin, GPIO_PIN_SET);
 	printf("DONE:Bit stream is flashed into SPI NOR");
 
 	// Reformat the drive space.
