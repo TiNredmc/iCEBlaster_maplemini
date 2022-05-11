@@ -29,3 +29,7 @@ The Bitstream loading sequence is something like this
 ```
 
 When done, The mcu release CRESET to let FPGA run the firmware that we just flash. Then perform the internal flash reformat to have a new and ready to Drag and Drop USB Disk.
+
+# Link(s)
+
+[Hackaday.io](https://hackaday.io/project/185263-iceblaster)
