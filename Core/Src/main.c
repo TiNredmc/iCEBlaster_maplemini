@@ -92,22 +92,20 @@ PUTCHAR_PROTOTYPE
  * after iCE40 boot up, it will start in SPI slave mode and then we can send the bit stream directly.
  */
 uint8_t directLoad(uint8_t *data, uint32_t size){
-	uint8_t dummy = 0x00;// dummy byte to kick start bit stream loading process.
+	uint8_t dummy[19] = {0};// dummy byte to kick start bit stream loading process.
 
 	// send series of bitstream to FPGA via SPI.
-	HAL_SPI_Transmit(&hspi1, data, size, 100);
+	HAL_SPI_Transmit(&hspi1, data, size, HAL_MAX_DELAY);
 
 	// Since we don't monitor the state of CDONE pin (Do it blindly).
 	// And to be sure that iCE40 is ready to boot
 	// We need to wait at least 100 SPI clock cycles.
 	// Send at least 100 clock cycles or 12 dummy bytes (96 cycles)
-	for(uint8_t i=0; i < 12;i++)
-		HAL_SPI_Transmit(&hspi1, &dummy, 1, 100);
+	HAL_SPI_Transmit(&hspi1, dummy, 12, HAL_MAX_DELAY);
 
 	// After 49 clock cycles. Pins that are used for configuration can be reconfigured and use as normal PIO.
 	// Send at least 49 clock cycles or 7 dummy bytes (56 cycles)
-	for(uint8_t i=0; i < 7;i++)
-		HAL_SPI_Transmit(&hspi1, &dummy, 1, 100);
+	HAL_SPI_Transmit(&hspi1, dummy, 7, HAL_MAX_DELAY);
 
 	// CE High
 	HAL_GPIO_WritePin(SPI1_CS_GPIO_Port, SPI1_CS_Pin, GPIO_PIN_SET);
@@ -121,12 +119,12 @@ void ice_mkfs(){
 	const uint8_t ms_fat12[62] = {
 			0xEB, 0x3C, 0x90, // Jump instruction to bootstrap (x86 instruction)
 			0x4D, 0x53, 0x44, 0x4F, 0x53, 0x35, 0x2E, 0x30,// OEM name as "MSDOS5.0"
-			0x00, 0x02,// sector size -> 0x200 = 512 bytes
-			0x01,// 1 Cluster = 1 sector = 512 bytes.
-			0x01, 0x00,// 1 sector reserved (FAT12)
+			0x00, 0x04,// sector size -> 0x400 = 1024 bytes
+			0x01,// 1 Cluster = 1 sector = 1024 bytes.
+			0x02, 0x00,// 2 sector reserved (FAT12)
 			0x02,// number of FATs == 2
 			0x00, 0x02,// 32-byte directory entries in the root directory == 512 bytes
-			0x80, 0x00, // total sector of 128 sectors
+			0x40, 0x00, // total sector of 64 sectors
 			0xF8, // Non-removable disk
 			0x01, 0x00,// FAT occupied 1 sector (FAT12)
 			0x01, 0x00,// 1 sector per track
@@ -159,13 +157,16 @@ void ice_mkfs(){
 
 		HAL_FLASH_Program(FLASH_TYPEPROGRAM_HALFWORD, FLASH_MEM_BASE_ADDR + 510, 0xAA55);// Write the signature of FAT file system at the end of sector 0.
 
+		for(uint32_t n = FLASH_MEM_BASE_ADDR + 512; n < (FLASH_MEM_BASE_ADDR + 0x1000); n += 4)
+									HAL_FLASH_Program(FLASH_TYPEPROGRAM_WORD, n, 0x00000000);
+
 		// Set Label name at the beginning of sector 3.
 		const uint8_t ice_label[16] = {'i', 'C', 'E', 'B', 'l', 'a', 's', 't', 'e', 'r', ' ', 0x08, 0x00, 0x00};
 		for(uint8_t i =0; i < 16; i+= 2)
-			HAL_FLASH_Program(FLASH_TYPEPROGRAM_HALFWORD, FLASH_MEM_BASE_ADDR + 0x600 +i, (ice_label[i] | ice_label[i+1] << 8));
-//
-//		for(uint32_t n = 16; n < 512; n += 2)
-//					HAL_FLASH_Program(FLASH_TYPEPROGRAM_HALFWORD, FLASH_MEM_BASE_ADDR + 0x600 + n, 0x0000);
+			HAL_FLASH_Program(FLASH_TYPEPROGRAM_HALFWORD, FLASH_MEM_BASE_ADDR + 0x1000 +i, (ice_label[i] | ice_label[i+1] << 8));
+
+		for(uint32_t n = FLASH_MEM_BASE_ADDR + 0x1010; n < 0x08020000; n += 4)
+							HAL_FLASH_Program(FLASH_TYPEPROGRAM_WORD, n, 0x00000000);
 }
 
 /* USER CODE END 0 */
@@ -250,6 +251,9 @@ int main(void)
 	}
 
 	flash_scan -= 3;// After detected the preamble, move address back 3 byte to the beginning of the Bitstream.
+
+	printf("INFO:Bitstream found at : %p\n", flash_scan);
+
 	// some temporary buffer to hold bit stream address on flash.
 	uint8_t *fdata;
     fdata = (uint8_t *)(flash_scan);
@@ -266,6 +270,7 @@ int main(void)
 
     // Calculate Bitstream size.
     bitstream_size = ((uint8_t *)flash_scan - fdata) + 1;
+    printf("INFO:Bitstream size : %ld\n", bitstream_size);
 
 	// release the reset and quickly blast Bitstream to FPGA.
 	// procedure according to TN-02001 app note.
@@ -277,17 +282,23 @@ int main(void)
 	// CRESET low
 	HAL_GPIO_WritePin(CRESET_pin_GPIO_Port, CRESET_pin_Pin, GPIO_PIN_RESET);
 
-	HAL_Delay(100);// wait for 100ms.
+	HAL_Delay(2);// wait for 2ms.
 
 	// CRESET High
 	HAL_GPIO_WritePin(CRESET_pin_GPIO_Port, CRESET_pin_Pin, GPIO_PIN_SET);
 
 	HAL_Delay(2);// wait for 2ms.
 
+	__disable_irq();
+
 	// FPGA bit stream loading
 	directLoad(fdata, bitstream_size);
 
-	printf("DONE:Bit stream is flashed into SPI NOR");
+	__enable_irq();
+
+	// release reset to lets FPGA run.
+	HAL_GPIO_WritePin(CRESET_pin_GPIO_Port, CRESET_pin_Pin, GPIO_PIN_SET);
+	printf("DONE:Bit stream is flashed into iCE40");
 
 	// Reformat the drive space.
 	ice_mkfs();
@@ -345,7 +356,7 @@ void SystemClock_Config(void)
   {
     Error_Handler();
   }
-  HAL_RCC_MCOConfig(RCC_MCO, RCC_MCO1SOURCE_SYSCLK, RCC_MCODIV_1);
+  HAL_RCC_MCOConfig(RCC_MCO, RCC_MCO1SOURCE_PLLCLK, RCC_MCODIV_1);
 }
 
 /**
@@ -368,8 +379,8 @@ static void MX_SPI1_Init(void)
   hspi1.Init.Mode = SPI_MODE_MASTER;
   hspi1.Init.Direction = SPI_DIRECTION_2LINES;
   hspi1.Init.DataSize = SPI_DATASIZE_8BIT;
-  hspi1.Init.CLKPolarity = SPI_POLARITY_LOW;
-  hspi1.Init.CLKPhase = SPI_PHASE_1EDGE;
+  hspi1.Init.CLKPolarity = SPI_POLARITY_HIGH;
+  hspi1.Init.CLKPhase = SPI_PHASE_2EDGE;
   hspi1.Init.NSS = SPI_NSS_SOFT;
   hspi1.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_16;
   hspi1.Init.FirstBit = SPI_FIRSTBIT_MSB;
