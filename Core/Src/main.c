@@ -287,7 +287,7 @@ int main(void)
 	// CRESET High
 	HAL_GPIO_WritePin(CRESET_pin_GPIO_Port, CRESET_pin_Pin, GPIO_PIN_SET);
 
-	HAL_Delay(2);// wait for 2ms.
+	HAL_Delay(200);// wait for 200ms to let CRAM cleared.
 
 	__disable_irq();
 
