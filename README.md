@@ -15,9 +15,9 @@ The Bitstream loading sequence is something like this
 // Reset and enter SPI mode sequence.
 1. Pull SPI CE Pin to Low
 2. Pull CRESET Pin to Low
-3. Wait for 100ms to make sure iCE40's Configuration RAM (CRAM) is cleared.
+3. Wait for 2ms.
 4. Release CRESET (to HIGH). At this point iCE40 is now in Slave SPI mode.
-5. wait for 2ms.
+5. wait for 200ms to make sure iCE40's Configuration RAM (CRAM) is cleared.
 
 // Bitstream loading sequence.
 6. Sending Bitstream data via SPI bus (MSB first for each byte).
