@@ -36,8 +36,6 @@
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
 
-static FLASH_EraseInitTypeDef EraseInitStruct;
-uint32_t PAGEError = 0;
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -52,13 +50,12 @@ uint32_t PAGEError = 0;
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
- SPI_HandleTypeDef hspi1;
+SPI_HandleTypeDef hspi1;
 
 UART_HandleTypeDef huart2;
 
 /* USER CODE BEGIN PV */
-
-
+uint8_t reset_flag = 0;
 
 /* USER CODE END PV */
 
@@ -87,87 +84,6 @@ PUTCHAR_PROTOTYPE
  * https://github.com/TiNredmc/iCEBlaster_maplemini
  */
 
-/* directLoad is used when sending bit stream directly to iCE40 FPGA.
- * treat it as a slave device. By make sure that the CE pin is held low before release CRESET.
- * after iCE40 boot up, it will start in SPI slave mode and then we can send the bit stream directly.
- */
-uint8_t directLoad(uint8_t *data, uint32_t size){
-	uint8_t dummy[19] = {0};// dummy byte to kick start bit stream loading process.
-
-	// send series of bitstream to FPGA via SPI.
-	HAL_SPI_Transmit(&hspi1, data, size, HAL_MAX_DELAY);
-
-	// Since we don't monitor the state of CDONE pin (Do it blindly).
-	// And to be sure that iCE40 is ready to boot
-	// We need to wait at least 100 SPI clock cycles.
-	// Send at least 100 clock cycles or 12 dummy bytes (96 cycles)
-	HAL_SPI_Transmit(&hspi1, dummy, 12, HAL_MAX_DELAY);
-
-	// After 49 clock cycles. Pins that are used for configuration can be reconfigured and use as normal PIO.
-	// Send at least 49 clock cycles or 7 dummy bytes (56 cycles)
-	HAL_SPI_Transmit(&hspi1, dummy, 7, HAL_MAX_DELAY);
-
-	// CE High
-	HAL_GPIO_WritePin(SPI1_CS_GPIO_Port, SPI1_CS_Pin, GPIO_PIN_SET);
-
-	return 0;
-}
-
-
-// Drive mkfs
-void ice_mkfs(){
-	const uint8_t ms_fat12[62] = {
-			0xEB, 0x3C, 0x90, // Jump instruction to bootstrap (x86 instruction)
-			0x4D, 0x53, 0x44, 0x4F, 0x53, 0x35, 0x2E, 0x30,// OEM name as "MSDOS5.0"
-			0x00, 0x04,// sector size -> 0x400 = 1024 bytes
-			0x01,// 1 Cluster = 1 sector = 1024 bytes.
-			0x02, 0x00,// 2 sector reserved (FAT12)
-			0x02,// number of FATs == 2
-			0x00, 0x02,// 32-byte directory entries in the root directory == 512 bytes
-			0x40, 0x00, // total sector of 64 sectors
-			0xF8, // Non-removable disk
-			0x01, 0x00,// FAT occupied 1 sector (FAT12)
-			0x01, 0x00,// 1 sector per track
-			0x01, 0x00,// 1 (reading?) head (irrelevant)
-			0x00, 0x00, 0x00, 0x00,// No hidden physical sectors.
-			0x00, 0x00, 0x00, 0x00,// Total number of sectors (For FAT32). Remains 0 since we use FAT12.
-			0x80,// Drive number (0x80 == fixed disk).
-			0x00,// Reserved (For WinNT).
-			0x29,// Extended boot signature
-			0xD5, 0x80, 0x9A, 0x1C,// Volume serial number
-			'I', 'C', 'E', 'B', 'L', 'A', 'S', 'T', 'E', 'R', ' ',// Volume label "ICEBLASTER ".
-			0x46, 0x41, 0x54, 0x31, 0x32, 0x20, 0x20, 0x20// "FAT12   "
-			};
-
-		// Format the drive
-
-
-		HAL_FLASH_Unlock();
-		// Page erase
-		EraseInitStruct.TypeErase = FLASH_TYPEERASE_PAGES; // erase 1024 KBytes (which is the size of 1 page).
-		EraseInitStruct.PageAddress = FLASH_MEM_BASE_ADDR; // We start erase from the beginning of sector.
-		EraseInitStruct.NbPages = 64; // this tells eraser for how many page we want to erase.
-
-		HAL_FLASHEx_Erase(&EraseInitStruct, &PAGEError);
-
-		for(uint8_t i=0; i < 62; i+= 2){// Write Boot sector (BIOS Parameter Block) to the internal Flash.
-			HAL_FLASH_Program(FLASH_TYPEPROGRAM_HALFWORD,
-					FLASH_MEM_BASE_ADDR + i, (ms_fat12[i] | ms_fat12[i+1] << 8)); // flash modified data onto Flash memory.
-		}
-
-		HAL_FLASH_Program(FLASH_TYPEPROGRAM_HALFWORD, FLASH_MEM_BASE_ADDR + 510, 0xAA55);// Write the signature of FAT file system at the end of sector 0.
-
-		for(uint32_t n = FLASH_MEM_BASE_ADDR + 512; n < (FLASH_MEM_BASE_ADDR + 0x1000); n += 4)
-									HAL_FLASH_Program(FLASH_TYPEPROGRAM_WORD, n, 0x00000000);
-
-		// Set Label name at the beginning of sector 3.
-		const uint8_t ice_label[16] = {'i', 'C', 'E', 'B', 'l', 'a', 's', 't', 'e', 'r', ' ', 0x08, 0x00, 0x00};
-		for(uint8_t i =0; i < 16; i+= 2)
-			HAL_FLASH_Program(FLASH_TYPEPROGRAM_HALFWORD, FLASH_MEM_BASE_ADDR + 0x1000 +i, (ice_label[i] | ice_label[i+1] << 8));
-
-		for(uint32_t n = FLASH_MEM_BASE_ADDR + 0x1010; n < 0x08020000; n += 4)
-							HAL_FLASH_Program(FLASH_TYPEPROGRAM_WORD, n, 0x00000000);
-}
 
 /* USER CODE END 0 */
 
@@ -178,7 +94,6 @@ void ice_mkfs(){
 int main(void)
 {
   /* USER CODE BEGIN 1 */
-	uint32_t bitstream_size = 0;
 
   /* USER CODE END 1 */
 
@@ -214,11 +129,10 @@ int main(void)
      * Set PB9 to Logic low */
 
      printf("%c",0x0c);// clear UART terminal screen
-
+     HAL_GPIO_WritePin(SPI1_CS_GPIO_Port, SPI1_CS_Pin, GPIO_PIN_SET);// Release SPI CE
      HAL_GPIO_WritePin(CRESET_pin_GPIO_Port, CRESET_pin_Pin, GPIO_PIN_SET);// Release reset pin, lets FPGA run.
-     ice_mkfs();
-
      HAL_GPIO_WritePin(USB_EN_GPIO_Port, USB_EN_Pin, GPIO_PIN_RESET);// Allow Electrical USB connection.
+     HAL_GPIO_WritePin(GPIOB, LED_Pin, GPIO_PIN_SET);
 
   /* USER CODE END 2 */
 
@@ -230,84 +144,14 @@ int main(void)
 
     /* USER CODE BEGIN 3 */
 
-	uint8_t *flash_scan = (uint8_t *)(FLASH_MEM_BASE_ADDR);
-	//Locate the Bitstream byte on internal flash by using "pattern match" algorithm.
-	while(1){
-	  //flash_scan++;
-		  if(flash_scan == (uint8_t *)FLASH_MEM_END_ADDR)
-					flash_scan = (uint8_t *)(FLASH_MEM_BASE_ADDR);
-
-	  if(*(flash_scan++) == 0x7E){//MSB byte of preamble should be at 0x8015805.
-		  if(*(flash_scan++) == 0xAA){
-			  if(*(flash_scan++) == 0x99){
-				  if(*flash_scan == 0x7E){
-					  // found!
-					  HAL_Delay(1000);// slow down a bit. Let's the Bitstream copied.
-					  break;
-				  }
-			  }
-		  }
-	  }
-	}
-
-	flash_scan -= 3;// After detected the preamble, move address back 3 byte to the beginning of the Bitstream.
-
-	printf("INFO:Bitstream found at : %p\n", flash_scan);
-
-	// some temporary buffer to hold bit stream address on flash.
-	uint8_t *fdata;
-    fdata = (uint8_t *)(flash_scan);
-
-    while(1){// detect wake up command (end of Bitstream).
-    	if(*(flash_scan++) == 0x01){
-    		if(*(flash_scan++) == 0x06){
-    			if(*flash_scan == 0x00){
-    				break;
-    			}
-    		}
-    	}
-    }
-
-    // Calculate Bitstream size.
-    bitstream_size = ((uint8_t *)flash_scan - fdata) + 1;
-    printf("INFO:Bitstream size : %ld\n", bitstream_size);
-
-	// release the reset and quickly blast Bitstream to FPGA.
-	// procedure according to TN-02001 app note.
-
-	/* FPGA Reset sequence*/
-	// CE Low
-	HAL_GPIO_WritePin(SPI1_CS_GPIO_Port, SPI1_CS_Pin, GPIO_PIN_RESET);
-
-	// CRESET low
-	HAL_GPIO_WritePin(CRESET_pin_GPIO_Port, CRESET_pin_Pin, GPIO_PIN_RESET);
-
-	HAL_Delay(2);// wait for 2ms.
-
-	// CRESET High
-	HAL_GPIO_WritePin(CRESET_pin_GPIO_Port, CRESET_pin_Pin, GPIO_PIN_SET);
-
-	HAL_Delay(200);// wait for 200ms to let CRAM cleared.
-
-	__disable_irq();
-
-	// FPGA bit stream loading
-	directLoad(fdata, bitstream_size);
-
-	__enable_irq();
-
-	// release reset to lets FPGA run.
-	HAL_GPIO_WritePin(CRESET_pin_GPIO_Port, CRESET_pin_Pin, GPIO_PIN_SET);
-	printf("DONE:Bit stream is flashed into iCE40");
-
-	// Reformat the drive space.
-	ice_mkfs();
-
+	if(reset_flag == 1){
 	// Disconnect and reconnect USB.
+	HAL_Delay(200);
 	HAL_GPIO_WritePin(USB_EN_GPIO_Port, USB_EN_Pin, GPIO_PIN_SET);
 	HAL_Delay(20);
 	HAL_GPIO_WritePin(USB_EN_GPIO_Port, USB_EN_Pin, GPIO_PIN_RESET);
-
+	reset_flag = 0;
+	}
   }// while
   /* USER CODE END 3 */
 }
@@ -356,7 +200,7 @@ void SystemClock_Config(void)
   {
     Error_Handler();
   }
-  HAL_RCC_MCOConfig(RCC_MCO, RCC_MCO1SOURCE_PLLCLK, RCC_MCODIV_1);
+  HAL_RCC_MCOConfig(RCC_MCO, RCC_MCO1SOURCE_SYSCLK, RCC_MCODIV_1);
 }
 
 /**
@@ -445,40 +289,30 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOB_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(CRESET_pin_GPIO_Port, CRESET_pin_Pin, GPIO_PIN_SET);
+  HAL_GPIO_WritePin(GPIOA, CRESET_pin_Pin|SPI1_CS_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(SPI1_CS_GPIO_Port, SPI1_CS_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOB, LED_Pin|USB_EN_Pin, GPIO_PIN_RESET);
 
-  /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(USB_EN_GPIO_Port, USB_EN_Pin, GPIO_PIN_RESET);
-
-  /*Configure GPIO pin : CRESET_pin_Pin */
-  GPIO_InitStruct.Pin = CRESET_pin_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_OD;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(CRESET_pin_GPIO_Port, &GPIO_InitStruct);
-
-  /*Configure GPIO pin : SPI1_CS_Pin */
-  GPIO_InitStruct.Pin = SPI1_CS_Pin;
+  /*Configure GPIO pins : CRESET_pin_Pin SPI1_CS_Pin */
+  GPIO_InitStruct.Pin = CRESET_pin_Pin|SPI1_CS_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(SPI1_CS_GPIO_Port, &GPIO_InitStruct);
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+
+  /*Configure GPIO pins : LED_Pin USB_EN_Pin */
+  GPIO_InitStruct.Pin = LED_Pin|USB_EN_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
   /*Configure GPIO pin : PA8 */
   GPIO_InitStruct.Pin = GPIO_PIN_8;
   GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
-
-  /*Configure GPIO pin : USB_EN_Pin */
-  GPIO_InitStruct.Pin = USB_EN_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(USB_EN_GPIO_Port, &GPIO_InitStruct);
 
 }
 

@@ -70,19 +70,16 @@
 
 /* USER CODE BEGIN PRIVATE_DEFINES */
 /* block size 512 bytes (STORAGE_BLK_SIZ = 0x200).
- * and block number is 128(STORAGE_BLK_NBR).
+ * and block number is 65535(STORAGE_BLK_NBR).
  */
-//#define SMALL_FS
+
 // Redefine
 #undef STORAGE_BLK_NBR
 #undef STORAGE_BLK_SIZ
-#ifdef SMALL_FS
-#define STORAGE_BLK_NBR                  128//64
-#define STORAGE_BLK_SIZ                  0x200//0x400
-#else
-#define STORAGE_BLK_NBR                  64
-#define STORAGE_BLK_SIZ                  0x400
-#endif
+
+#define STORAGE_BLK_NBR                  0xFFFF
+#define STORAGE_BLK_SIZ                  0x200
+
 /* USER CODE END PRIVATE_DEFINES */
 
 /**
@@ -122,14 +119,41 @@ const int8_t STORAGE_Inquirydata_FS[] = {/* 36 */
   0x00,
   'T', 'L', 'H', 'X', ' ', ' ', ' ', ' ', /* Manufacturer : 8 bytes */
   'i', 'C', 'E', 'B', 'L', 'A', 'S', 'T', /* Product      : 16 Bytes */
-  'E', 'R', ' ', ' ', ' ', ' ', ' ', ' ',
+  'E', 'R', ' ', 'V', 'F', 'S', ' ', ' ',
   '0', '.', '0' ,'1'                      /* Version      : 4 Bytes */
 };
 /* USER CODE END INQUIRY_DATA_FS */
 
 /* USER CODE BEGIN PRIVATE_VARIABLES */
-  static FLASH_EraseInitTypeDef USB_EraseInitStruct;
-  uint32_t USB_PAGEError = 0;
+// FAT12 template
+const uint8_t ms_fat12[62] = {
+		0xEB, 0x3C, 0x90, // Jump instruction to bootstrap (x86 instruction)
+		0x4D, 0x53, 0x44, 0x4F, 0x53, 0x35, 0x2E, 0x30,// OEM name as "MSDOS5.0"
+		0x00, 0x02,// sector size -> 0x200 = 512 bytes
+		0x01,// 1 Cluster = 1 sector = 512 bytes.
+		0x02, 0x00,// 2 sector reserved (FAT12)
+		0x02,// number of FATs == 2
+		0x00, 0x02,// 32-byte directory entries in the root directory == 512 bytes
+		0xFF, 0xFF, // total sector of 128 sectors
+		0xF8, // Non-removable disk
+		0x01, 0x00,// FAT occupied 1 sector (FAT12)
+		0x01, 0x00,// 1 sector per track
+		0x01, 0x00,// 1 (reading?) head (irrelevant)
+		0x00, 0x00, 0x00, 0x00,// No hidden physical sectors.
+		0x00, 0x00, 0x00, 0x00,// Total number of sectors (For FAT32). Remains 0 since we use FAT12.
+		0x80,// Drive number (0x80 == fixed disk).
+		0x00,// Reserved (For WinNT).
+		0x29,// Extended boot signature
+		0xD5, 0x80, 0x9A, 0x1C,// Volume serial number
+		'I', 'C', 'E', 'B', 'L', 'A', 'S', 'T', 'E', 'R', ' ',// Volume label "ICEBLASTER ".
+		0x46, 0x41, 0x54, 0x31, 0x32, 0x20, 0x20, 0x20// "FAT12   "
+		};
+// Volume label
+const uint8_t ice_label[16] = {'i', 'C', 'E', 'B', 'l', 'a', 's', 't', 'e', 'r', ' ', 0x08, 0x00, 0x00};
+
+const uint8_t dummy[19] = {0};// dummy byte to kick start bit stream loading process.
+
+uint8_t SPIsend_fsm = 0;
 /* USER CODE END PRIVATE_VARIABLES */
 
 /**
@@ -144,7 +168,7 @@ const int8_t STORAGE_Inquirydata_FS[] = {/* 36 */
 extern USBD_HandleTypeDef hUsbDeviceFS;
 
 /* USER CODE BEGIN EXPORTED_VARIABLES */
-
+extern SPI_HandleTypeDef hspi1;
 /* USER CODE END EXPORTED_VARIABLES */
 
 /**
@@ -165,8 +189,8 @@ static int8_t STORAGE_Write_FS(uint8_t lun, uint8_t *buf, uint32_t blk_addr, uin
 static int8_t STORAGE_GetMaxLun_FS(void);
 
 /* USER CODE BEGIN PRIVATE_FUNCTIONS_DECLARATION */
-
-
+void usb_vfs_read(uint8_t *buffer, uint32_t block_number);
+void usb_vfs_write(uint8_t *buffer, uint32_t block_number);
 /* USER CODE END PRIVATE_FUNCTIONS_DECLARATION */
 
 /**
@@ -194,7 +218,6 @@ USBD_StorageTypeDef USBD_Storage_Interface_fops_FS =
 int8_t STORAGE_Init_FS(uint8_t lun)
 {
   /* USER CODE BEGIN 2 */
-	HAL_FLASH_Unlock();
   return (USBD_OK);
   /* USER CODE END 2 */
 }
@@ -247,14 +270,7 @@ int8_t STORAGE_IsWriteProtected_FS(uint8_t lun)
 int8_t STORAGE_Read_FS(uint8_t lun, uint8_t *buf, uint32_t blk_addr, uint16_t blk_len)
 {
   /* USER CODE BEGIN 6 */
-	// convert block address (block number) into absolute address
-#ifdef SMALL_FS
-	uint32_t inbuf_addr = blk_addr << 9;// 1 sector has 512 bytes in size. 1 << 9 = 1*512.
-#else
-	uint32_t inbuf_addr = blk_addr << 10; // 1 sector has 1024 bytes in size. 1 << 10 = 1*1024.
-#endif
-
-	memcpy(buf, (uint8_t *)(FLASH_MEM_BASE_ADDR + inbuf_addr),  STORAGE_BLK_SIZ);
+	usb_vfs_read(buf, blk_addr);
 	return (USBD_OK);
   /* USER CODE END 6 */
 }
@@ -267,76 +283,7 @@ int8_t STORAGE_Read_FS(uint8_t lun, uint8_t *buf, uint32_t blk_addr, uint16_t bl
 int8_t STORAGE_Write_FS(uint8_t lun, uint8_t *buf, uint32_t blk_addr, uint16_t blk_len)
 {
   /* USER CODE BEGIN 7 */
-#ifdef SMALL_FS
-	static uint8_t mod_space[FLASH_PAGE_SIZE]; // space to copy data from flash for modifying data before page erase and re-flash
-	// convert sector number into physical address of the flash.
-	// 1 sector has 512 bytes in size.
-
-	uint32_t temp_buf = 0; // temp buffer to merge four bytes into 4 byte 32 bit (word).
-	uint32_t cpy_addr = 0;
-
-	// Unlock flash for writing
-	HAL_FLASH_Unlock();
-
-	// Since our flash page size is 1024 bytes, but fatfs can only write 512 bytes each time (512 bytes per 1 sector).
-	// Which it means that 1 flash page fits 2 fatfs sectors.
-	// Thus, in order to write properly. Even sector number will we written to lower half of flash page [0-511].
-	// and Odd sector number will we written to upper half of flash page [512-1023].
-
-	// read back from flash.
-	// use sector number to calculate the physical page offset of flash of that sector number.
-	// (sector/2)*FLASH_PAGE_SIZE always return page-aligned number a.k.a page starting address.
-	cpy_addr = (FLASH_MEM_BASE_ADDR	+ ((blk_addr >> 1) << 10));
-	memcpy(mod_space, (uint8_t*) cpy_addr,	FLASH_PAGE_SIZE);
-
-	// modify data in buffer.
-	// Even sector number reads from [0-511]. Odd sector number reads from [512-1023].
-	memcpy(mod_space + ((blk_addr % 2) << 9), buf, 512);
-	//buff+=512;
-
-	// Page erase
-	USB_EraseInitStruct.TypeErase = FLASH_TYPEERASE_PAGES; // erase 1024 KBytes (which is the size of 1 page).
-	USB_EraseInitStruct.PageAddress = cpy_addr; // We start erase from the beginning of sector.
-	USB_EraseInitStruct.NbPages = 1; // this tells eraser for how many page we want to erase. Which is 1 page.
-
-	HAL_FLASHEx_Erase(&USB_EraseInitStruct, &USB_PAGEError);
-
-	// flash the modified data back to Flash memory.
-	for (uint32_t i = 0; i < FLASH_PAGE_SIZE; i+=4) {
-		temp_buf = mod_space[i] | mod_space[i+1] << 8 | mod_space[i+2] << 16
-				| mod_space[i+3] << 24; // parse byte n n+1 n+2 and n+3
-		//memcpy(&temp_buf, mod_space+(i*4), 4);// Copy 4 byte into one DWORD (unt32_t byte).
-		HAL_FLASH_Program(FLASH_TYPEPROGRAM_WORD,
-				USB_EraseInitStruct.PageAddress + i, temp_buf); // flash modified data onto Flash memory.
-
-	}
-#else
-	static uint32_t temp_buf;// temp buffer to merge 4 8-bit (byte) into 32 bit (word).
-
-	// convert block address (block number) into absolute address
-	uint32_t inbuf_addr = blk_addr << 10; // 1 sector has 1024 bytes in size. 1 << 10 = 1*1024.
-
-	// Unlock flash for writing
-	HAL_FLASH_Unlock();
-
-	// Page erase
-	USB_EraseInitStruct.TypeErase = FLASH_TYPEERASE_PAGES; // erase 1024 KBytes (which is the size of 1 page).
-	USB_EraseInitStruct.PageAddress = FLASH_MEM_BASE_ADDR + inbuf_addr; // We start erase from the beginning of sector.
-	USB_EraseInitStruct.NbPages = 1; // this tells eraser for how many page we want to erase.
-
-	HAL_FLASHEx_Erase(&USB_EraseInitStruct, &USB_PAGEError);
-
-	// flash the data to Flash memory
-	for(uint32_t i = 0; i < STORAGE_BLK_SIZ;i+=4){
-	temp_buf = *buf | (*(buf + 1) << 8) | (*(buf + 2) << 16)
-			| (*(buf + 3) << 24); // parse byte n n+1 n+2 and n+3
-
-	HAL_FLASH_Program(FLASH_TYPEPROGRAM_WORD,
-			USB_EraseInitStruct.PageAddress + i, temp_buf); // flash data onto Flash memory.
-
-	buf += 4;
-	}
-#endif
+	usb_vfs_write(buf, blk_addr);
   return (USBD_OK);
   /* USER CODE END 7 */
 }
@@ -354,7 +301,108 @@ int8_t STORAGE_GetMaxLun_FS(void)
 }
 
 /* USER CODE BEGIN PRIVATE_FUNCTIONS_IMPLEMENTATION */
+// USB vfs for iCEBlaster, No longer use internal flash as storage medium.
+// USB info : sector size 512 bytes. 65535 sectors.
+// Coded by TinLethax 2022/07/05 +7
 
+void usb_vfs_read(uint8_t *buffer, uint32_t block_number){
+
+	switch(block_number){//
+
+	case 0: // Sector 0. return FAT filesystem and signature.
+			memcpy(buffer, ms_fat12, 62);// write FAT12 filesystem
+			// write FAT signature
+			*(buffer + 510) = 0xAA;
+			*(buffer + 511) = 0x55;
+			break;
+
+	case 4: // Sector 4. Beginning of Volume. Return Volume label
+			memcpy(buffer, ice_label, 16);
+			//memset(buffer+16, 0x00, 496);// 0s padding
+			break;
+
+	default: // Other sector just sends 0s
+			memset(buffer, 0x00, 512);
+			break;
+	}
+
+}
+
+void usb_vfs_write(uint8_t *buffer, uint32_t block_number){
+	uint16_t end_addr = 0;
+	uint8_t temp_buf[512] = {0};
+	uint32_t cnt = 0x1F0000;
+
+	memcpy(temp_buf, buffer, 512);// make a nice copy.
+
+	switch(SPIsend_fsm){
+	case 0: // detect the preamble and send bit stream
+		for(uint16_t i=0; i < 512; i++){// Detect Bitstream preamble
+			if(temp_buf[i] == 0x7E){
+				if(temp_buf[i+1] == 0xAA){
+					if(temp_buf[i+2] == 0x99){
+						if(temp_buf[i+3] == 0x7E){
+							// LED status on
+							HAL_GPIO_WritePin(GPIOB, LED_Pin, GPIO_PIN_RESET);
+
+							/* This part is reset sequence of iCE40 FPGA
+							 * CE low
+							 * CRESET low
+							 * (optional)delay 2ms
+							 * CRESET high
+							 * delay 200ms(crucial)
+							 * SPI TX
+							 */
+
+							HAL_GPIO_WritePin(SPI1_CS_GPIO_Port, SPI1_CS_Pin, GPIO_PIN_RESET);
+							HAL_GPIO_WritePin(CRESET_pin_GPIO_Port, CRESET_pin_Pin, GPIO_PIN_RESET);
+							HAL_GPIO_WritePin(CRESET_pin_GPIO_Port, CRESET_pin_Pin, GPIO_PIN_SET);
+
+
+							//HAL_Delay(200);// wait for 200ms to let CRAM cleared.
+
+							while(cnt--);// delay ~250ms using while loop. For some reason it's working!
+
+							HAL_SPI_Transmit(&hspi1, temp_buf + i, 512 - i, HAL_MAX_DELAY);// start SPI TX
+							SPIsend_fsm = 1;
+							break;
+						}
+					}
+				}
+			}
+		}
+		break;
+
+	case 1:
+		// make sure that there's no Bitstream ending before we write from current sector data.
+		// This make sure that we can handle the different Bitstream size that was split into n numbers of 512 bytes sector.
+		end_addr = 512;
+		for(uint16_t i=0; i < 512; i++){// locate ending
+			if(temp_buf[i] == 0x01){
+	    		if(temp_buf[i+1] == 0x06){
+	    			if(temp_buf[i+2] == 0x00){
+	    				end_addr = i + 3;// save the buffer address (as size) that contain Bitstream ending.
+	    				SPIsend_fsm = 0;// Set SPI state machine to 0
+	    			}
+	    		}
+	    	}
+		}
+
+		HAL_SPI_Transmit(&hspi1, temp_buf, end_addr, HAL_MAX_DELAY);// SPI TX
+		if(SPIsend_fsm == 0){// This part of code will execute if SPI state machine will go back to 0 (Because we found Bitstream Ending).
+			HAL_SPI_Transmit(&hspi1, dummy, 19, HAL_MAX_DELAY);// Send dummy bytes to kickstart iCE40
+			HAL_GPIO_WritePin(SPI1_CS_GPIO_Port, SPI1_CS_Pin, GPIO_PIN_SET);// Release SPI CE
+			HAL_GPIO_WritePin(GPIOB, LED_Pin, GPIO_PIN_SET);// turn Status LED off
+			reset_flag = 1;// Code in while loop monitor this flag. When flag goes 1, USB reconnect and clear the flag.
+		}
+		break;
+
+	default:
+		break;
+	}// switch(SPIsend_fsm)
+
+	//return (USBD_OK);
+}
 /* USER CODE END PRIVATE_FUNCTIONS_IMPLEMENTATION */
 
 /**

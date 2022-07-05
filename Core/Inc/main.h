@@ -54,6 +54,7 @@ extern "C" {
 void Error_Handler(void);
 
 /* USER CODE BEGIN EFP */
+extern uint8_t reset_flag;
 
 /* USER CODE END EFP */
 
@@ -62,6 +63,8 @@ void Error_Handler(void);
 #define CRESET_pin_GPIO_Port GPIOA
 #define SPI1_CS_Pin GPIO_PIN_4
 #define SPI1_CS_GPIO_Port GPIOA
+#define LED_Pin GPIO_PIN_1
+#define LED_GPIO_Port GPIOB
 #define USB_EN_Pin GPIO_PIN_9
 #define USB_EN_GPIO_Port GPIOB
 /* USER CODE BEGIN Private defines */
