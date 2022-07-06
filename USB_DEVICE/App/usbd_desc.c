@@ -64,7 +64,7 @@
 
 #define USBD_VID     0x1209
 #define USBD_LANGID_STRING     1033
-#define USBD_MANUFACTURER_STRING     "STMicroelectronics"
+#define USBD_MANUFACTURER_STRING     "TinLethax"
 #define USBD_PID_FS     0x2069
 #define USBD_PRODUCT_STRING_FS     "iCEBlaster"
 #define USBD_CONFIGURATION_STRING_FS     "MSC Config"
