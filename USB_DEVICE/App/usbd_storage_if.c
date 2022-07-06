@@ -307,7 +307,7 @@ int8_t STORAGE_GetMaxLun_FS(void)
 
 void usb_vfs_read(uint8_t *buffer, uint32_t block_number){
 
-	switch(block_number){//
+	switch(block_number){// Put sector number into switch case
 
 	case 0: // Sector 0. return FAT filesystem and signature.
 			memcpy(buffer, ms_fat12, 62);// write FAT12 filesystem
